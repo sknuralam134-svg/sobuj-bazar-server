@@ -1,0 +1,215 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  buyer
+  vendor
+  admin
+  wholesale
+}
+
+enum OrderStatus {
+  pending
+  confirmed
+  shipped
+  delivered
+  cancelled
+}
+
+enum PaymentMethod {
+  cod
+  online
+}
+
+enum DeliveryStatus {
+  assigned
+  picked_up
+  in_transit
+  delivered
+}
+
+enum NotificationType {
+  order_placed
+  order_status
+  info
+}
+
+model User {
+  id                String    @id @default(uuid())
+  email             String    @unique
+  passwordHash      String
+  fullName          String
+  phone             String?
+  address           String?
+  city              String?
+  area              String?
+  role              Role      @default(buyer)
+  shopName          String?
+  shopDescription   String?
+  latitude          Float?
+  longitude         Float?
+  deliveryRadiusKm  Float?
+
+  emailVerified     Boolean   @default(false)
+  otpCodeHash       String?
+  otpExpiresAt      DateTime?
+  otpAttempts       Int       @default(0)
+
+  resetTokenHash    String?
+  resetTokenExpires DateTime?
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  products          Product[]       @relation("VendorProducts")
+  cartItems         CartItem[]
+  buyerOrders       Order[]         @relation("BuyerOrders")
+  vendorOrders      Order[]         @relation("VendorOrders")
+  notifications     Notification[]
+
+  @@map("users")
+}
+
+model Category {
+  id          String    @id @default(uuid())
+  name        String
+  slug        String    @unique
+  icon        String    @default("🥬")
+  description String?
+  products    Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id               String    @id @default(uuid())
+  vendorId         String
+  vendor           User      @relation("VendorProducts", fields: [vendorId], references: [id], onDelete: Cascade)
+  categoryId       String?
+  category         Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  name             String
+  slug             String
+  description      String?
+  price            Decimal   @db.Decimal(10, 2)
+  unit             String    @default("kg")
+  stockQty         Int       @default(0)
+  imageUrl         String?
+  isAvailable      Boolean   @default(true)
+
+  wholesalePrice   Decimal?  @db.Decimal(10, 2)
+  wholesaleMinQty  Int?
+
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  cartItems        CartItem[]
+  orderItems       OrderItem[]
+
+  @@index([vendorId])
+  @@index([categoryId])
+  @@map("products")
+}
+
+model CartItem {
+  id         String   @id @default(uuid())
+  buyerId    String
+  buyer      User     @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  quantity   Int      @default(1)
+  createdAt  DateTime @default(now())
+
+  @@unique([buyerId, productId])
+  @@map("cart_items")
+}
+
+model Order {
+  id               String        @id @default(uuid())
+  buyerId          String
+  buyer            User          @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: Cascade)
+  vendorId         String
+  vendor           User          @relation("VendorOrders", fields: [vendorId], references: [id], onDelete: Cascade)
+
+  totalAmount      Decimal       @db.Decimal(10, 2)
+  status           OrderStatus   @default(pending)
+  deliveryAddress  String
+  deliveryPhone    String
+  deliveryNotes    String?
+  paymentMethod    PaymentMethod @default(cod)
+
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  orderItems       OrderItem[]
+  delivery         Delivery?
+  notifications    Notification[]
+
+  @@index([buyerId])
+  @@index([vendorId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id               String   @id @default(uuid())
+  orderId          String
+  order            Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId        String
+  product          Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  quantity         Int
+  priceAtPurchase  Decimal  @db.Decimal(10, 2)
+  createdAt        DateTime @default(now())
+
+  @@map("order_items")
+}
+
+model Delivery {
+  id                   String         @id @default(uuid())
+  orderId              String         @unique
+  order                Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  deliveryPartnerName  String?
+  status               DeliveryStatus @default(assigned)
+  trackingNote         String?
+  estimatedDelivery    DateTime?
+  actualDelivery       DateTime?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  @@map("deliveries")
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  type      NotificationType @default(info)
+  orderId   String?
+  order     Order?           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+model SiteSettings {
+  id             Int      @id @default(1)
+  contactPhone   String   @default("+91 9733010828")
+  contactEmail   String   @default("info@sobujbazar.com")
+  address        String   @default("গোকর্ণ, মুর্শিদাবাদ, পশ্চিমবঙ্গ, ৭৪২১৩৬")
+  businessHours  String   @default("প্রতিদিন সকাল ৮টা - রাত ৯টা")
+  facebookUrl    String?
+  instagramUrl   String?
+  tagline        String   @default("তাজা ও জৈব সবজি সরাসরি কৃষকের কাছ থেকে আপনার ঘরে।")
+  updatedAt      DateTime @updatedAt
+
+  @@map("site_settings")
+}
