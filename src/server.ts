@@ -4,6 +4,7 @@ import cors from 'cors'
 import http from 'http'
 import { Server } from 'socket.io'
 import { verifyToken } from './middleware/auth'
+import { toCamelCase, toSnakeCase } from './utils/caseConvert'
 
 import authRoutes from './routes/auth.routes'
 import productRoutes from './routes/products.routes'
@@ -48,6 +49,24 @@ app.set('io', io)
 
 app.use(cors({ origin: allowedOrigins.length ? allowedOrigins : '*' }))
 app.use(express.json())
+
+// The frontend was originally written against Supabase's snake_case columns
+// (full_name, image_url, ...). Prisma models use camelCase. Rather than
+// rewriting every field reference across the frontend, we convert at the
+// edge: incoming request bodies are camelCased for the route handlers below,
+// and outgoing JSON responses are snake_cased for the frontend.
+app.use((req, _res, next) => {
+  if (req.body && typeof req.body === 'object') {
+    req.body = toCamelCase(req.body)
+  }
+  next()
+})
+
+app.use((_req, res, next) => {
+  const originalJson = res.json.bind(res)
+  res.json = ((body: any) => originalJson(toSnakeCase(body))) as typeof res.json
+  next()
+})
 
 app.get('/health', (_req, res) => res.json({ ok: true }))
 
