@@ -42,10 +42,11 @@ enum NotificationType {
 
 model User {
   id                String    @id @default(uuid())
-  email             String    @unique
-  passwordHash      String
+  email             String?   @unique
+  passwordHash      String?
   fullName          String
-  phone             String?
+  phone             String?   @unique
+  firebaseUid       String?   @unique
   address           String?
   city              String?
   area              String?
