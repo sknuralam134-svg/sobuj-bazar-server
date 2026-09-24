@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma'
 import { requireAuth } from '../middleware/auth'
 import { sendOtpEmail, sendPasswordResetEmail } from '../lib/email'
 import { signToken } from '../middleware/auth'
+import { verifyFirebaseIdToken } from '../lib/firebaseAdmin'
 
 const router = Router()
 
@@ -21,8 +22,16 @@ function generateOtp() {
 }
 
 function publicUser(user: any) {
-  const { passwordHash, otpCodeHash, otpExpiresAt, otpAttempts, resetTokenHash, resetTokenExpires, ...safeUser } = user
+  const { passwordHash, otpCodeHash, otpExpiresAt, otpAttempts, resetTokenHash, resetTokenExpires, firebaseUid, ...safeUser } = user
   return safeUser
+}
+
+function toAuthUser(user: { id: string; role: string; email: string | null; phone: string | null }) {
+  return {
+    id: user.id,
+    role: user.role,
+    email: user.email || user.phone || '',
+  }
 }
 
 router.post('/register', async (req, res, next) => {
@@ -129,8 +138,11 @@ router.post('/verify-otp', async (req, res, next) => {
       },
     })
 
-    const authUser = { id: verifiedUser.id, role: verifiedUser.role, email: verifiedUser.email }
-    return res.json({ message: 'ইমেইল ভেরিফাই হয়েছে', token: signToken(authUser), user: publicUser(verifiedUser) })
+    return res.json({
+      message: 'ইমেইল ভেরিফাই হয়েছে',
+      token: signToken(toAuthUser(verifiedUser)),
+      user: publicUser(verifiedUser),
+    })
   } catch (err) {
     next(err)
   }
@@ -147,7 +159,7 @@ router.post('/resend-otp', async (req, res, next) => {
     if (user.emailVerified) return res.status(400).json({ error: 'ইমেইল ইতিমধ্যে ভেরিফাই করা হয়েছে' })
 
     const code = generateOtp()
-    const updated = await prisma.user.update({
+    await prisma.user.update({
       where: { id: user.id },
       data: {
         otpCodeHash: hashValue(code),
@@ -182,14 +194,79 @@ router.post('/login', async (req, res, next) => {
     }
 
     const user = await prisma.user.findUnique({ where: { email: normalizedEmail } })
-    if (!user) return res.status(401).json({ error: 'ইমেইল বা পাসওয়ার্ড ভুল' })
+    if (!user || !user.passwordHash) {
+      return res.status(401).json({ error: 'ইমেইল বা পাসওয়ার্ড ভুল' })
+    }
 
     const valid = await bcrypt.compare(password, user.passwordHash)
     if (!valid) return res.status(401).json({ error: 'ইমেইল বা পাসওয়ার্ড ভুল' })
     if (!user.emailVerified) return res.status(403).json({ error: 'আগে ইমেইল ভেরিফাই করুন' })
 
-    const authUser = { id: user.id, role: user.role, email: user.email }
-    return res.json({ token: signToken(authUser), user: publicUser(user) })
+    return res.json({ token: signToken(toAuthUser(user)), user: publicUser(user) })
+  } catch (err) {
+    next(err)
+  }
+})
+
+/** Firebase Phone Auth — client sends Firebase ID token after SMS OTP success */
+router.post('/phone', async (req, res, next) => {
+  try {
+    const { idToken, fullName } = req.body as { idToken?: string; fullName?: string }
+    if (!idToken?.trim()) {
+      return res.status(400).json({ error: 'Firebase idToken দিতে হবে' })
+    }
+
+    let decoded: { uid: string; phone_number?: string; name?: string }
+    try {
+      decoded = await verifyFirebaseIdToken(idToken.trim())
+    } catch (err: any) {
+      console.error('[auth/phone] token verify failed', err?.message || err)
+      return res.status(401).json({ error: 'অবৈধ বা মেয়াদোত্তীর্ণ ফোন ভেরিফিকেশন' })
+    }
+
+    const phone = decoded.phone_number?.trim()
+    if (!phone) {
+      return res.status(400).json({ error: 'ফোন নম্বর পাওয়া যায়নি। আবার OTP দিন।' })
+    }
+
+    const name =
+      fullName?.trim() ||
+      decoded.name?.trim() ||
+      `User ${phone.slice(-4)}`
+
+    let user =
+      (await prisma.user.findUnique({ where: { firebaseUid: decoded.uid } })) ||
+      (await prisma.user.findUnique({ where: { phone } }))
+
+    if (user) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          firebaseUid: decoded.uid,
+          phone,
+          emailVerified: true,
+          ...(user.fullName ? {} : { fullName: name }),
+        },
+      })
+    } else {
+      user = await prisma.user.create({
+        data: {
+          firebaseUid: decoded.uid,
+          phone,
+          fullName: name,
+          role: 'buyer',
+          emailVerified: true,
+          email: null,
+          passwordHash: null,
+        },
+      })
+    }
+
+    return res.json({
+      message: 'ফোন দিয়ে লগইন সফল',
+      token: signToken(toAuthUser(user)),
+      user: publicUser(user),
+    })
   } catch (err) {
     next(err)
   }
@@ -202,7 +279,9 @@ router.post('/forgot-password', async (req, res, next) => {
     if (!normalizedEmail) return res.status(400).json({ error: 'ইমেইল দিতে হবে' })
 
     const user = await prisma.user.findUnique({ where: { email: normalizedEmail } })
-    if (!user) return res.json({ message: 'যদি এই ইমেইলটি নিবন্ধিত থাকে, রিসেট লিংক পাঠানো হবে' })
+    if (!user || !user.passwordHash) {
+      return res.json({ message: 'যদি এই ইমেইলটি নিবন্ধিত থাকে, রিসেট লিংক পাঠানো হবে' })
+    }
 
     const rawToken = crypto.randomBytes(32).toString('hex')
     await prisma.user.update({
