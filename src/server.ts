@@ -25,8 +25,7 @@ const io = new Server(server, {
   cors: { origin: allowedOrigins.length ? allowedOrigins : '*' },
 })
 
-// Socket auth: client connects with `auth: { token }`; join a room keyed by user id
-// so we can push targeted notification events (mirrors Supabase Realtime).
+// Socket authentication: clients connect with `auth: { token }`.
 io.use((socket, next) => {
   try {
     const token = socket.handshake.auth?.token as string | undefined
@@ -50,11 +49,8 @@ app.set('io', io)
 app.use(cors({ origin: allowedOrigins.length ? allowedOrigins : '*' }))
 app.use(express.json())
 
-// The frontend was originally written against Supabase's snake_case columns
-// (full_name, image_url, ...). Prisma models use camelCase. Rather than
-// rewriting every field reference across the frontend, we convert at the
-// edge: incoming request bodies are camelCased for the route handlers below,
-// and outgoing JSON responses are snake_cased for the frontend.
+// Keep the API compatible with the frontend's snake_case fields while Prisma
+// models use camelCase internally.
 app.use((req, _res, next) => {
   if (req.body && typeof req.body === 'object') {
     req.body = toCamelCase(req.body)
