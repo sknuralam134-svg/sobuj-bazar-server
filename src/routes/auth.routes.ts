@@ -208,7 +208,7 @@ router.post('/login', async (req, res, next) => {
   }
 })
 
-/** Firebase Phone Auth — client sends Firebase ID token after SMS OTP success */
+/** Firebase Phone Auth */
 router.post('/phone', async (req, res, next) => {
   try {
     const { idToken, fullName } = req.body as { idToken?: string; fullName?: string }
@@ -229,10 +229,7 @@ router.post('/phone', async (req, res, next) => {
       return res.status(400).json({ error: 'ফোন নম্বর পাওয়া যায়নি। আবার OTP দিন।' })
     }
 
-    const name =
-      fullName?.trim() ||
-      decoded.name?.trim() ||
-      `User ${phone.slice(-4)}`
+    const name = fullName?.trim() || decoded.name?.trim() || `User ${phone.slice(-4)}`
 
     let user =
       (await prisma.user.findUnique({ where: { firebaseUid: decoded.uid } })) ||
@@ -264,6 +261,72 @@ router.post('/phone', async (req, res, next) => {
 
     return res.json({
       message: 'ফোন দিয়ে লগইন সফল',
+      token: signToken(toAuthUser(user)),
+      user: publicUser(user),
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+/** Firebase Google OAuth — client sends Firebase ID token after Google sign-in */
+router.post('/google', async (req, res, next) => {
+  try {
+    const { idToken } = req.body as { idToken?: string }
+    if (!idToken?.trim()) {
+      return res.status(400).json({ error: 'Firebase idToken দিতে হবে' })
+    }
+
+    let decoded: {
+      uid: string
+      email?: string
+      email_verified?: boolean
+      name?: string
+      picture?: string
+    }
+    try {
+      decoded = await verifyFirebaseIdToken(idToken.trim())
+    } catch (err: any) {
+      console.error('[auth/google] token verify failed', err?.message || err)
+      return res.status(401).json({ error: 'অবৈধ বা মেয়াদোত্তীর্ণ Google লগইন' })
+    }
+
+    const email = decoded.email?.trim().toLowerCase()
+    if (!email) {
+      return res.status(400).json({ error: 'Google অ্যাকাউন্ট থেকে ইমেইল পাওয়া যায়নি' })
+    }
+
+    const name = decoded.name?.trim() || email.split('@')[0]
+
+    let user =
+      (await prisma.user.findUnique({ where: { firebaseUid: decoded.uid } })) ||
+      (await prisma.user.findUnique({ where: { email } }))
+
+    if (user) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          firebaseUid: decoded.uid,
+          email,
+          emailVerified: true,
+          fullName: user.fullName || name,
+        },
+      })
+    } else {
+      user = await prisma.user.create({
+        data: {
+          firebaseUid: decoded.uid,
+          email,
+          fullName: name,
+          role: 'buyer',
+          emailVerified: true,
+          passwordHash: null,
+        },
+      })
+    }
+
+    return res.json({
+      message: 'Google দিয়ে লগইন সফল',
       token: signToken(toAuthUser(user)),
       user: publicUser(user),
     })
