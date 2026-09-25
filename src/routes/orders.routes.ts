@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { prisma } from '../lib/prisma'
 import { requireAuth, requireRole } from '../middleware/auth'
 import { getEffectivePrice } from '../utils/pricing'
+import { notifyUser, maybeNotifyLowStock } from '../lib/notify'
 
 const router = Router()
 router.use(requireAuth)
@@ -12,13 +13,6 @@ const orderInclude = {
   vendor: { select: { id: true, fullName: true, shopName: true } },
   delivery: true,
 } as const
-
-async function notify(userId: string, title: string, message: string, type: string, orderId?: string) {
-  const notification = await prisma.notification.create({
-    data: { userId, title, message, type: type as any, orderId },
-  })
-  return notification
-}
 
 // POST /orders — checkout: groups the buyer's cart by vendor into separate orders.
 router.post('/', async (req, res) => {
@@ -32,6 +26,15 @@ router.post('/', async (req, res) => {
     include: { product: true },
   })
   if (cartItems.length === 0) return res.status(400).json({ error: 'কার্ট খালি' })
+
+  // Stock check before creating orders
+  for (const item of cartItems) {
+    if (item.product.stockQty < item.quantity) {
+      return res.status(400).json({
+        error: `${item.product.name}-এ পর্যাপ্ত স্টক নেই (আছে: ${item.product.stockQty} ${item.product.unit})`,
+      })
+    }
+  }
 
   const byVendor = new Map<string, typeof cartItems>()
   for (const item of cartItems) {
@@ -51,7 +54,9 @@ router.post('/', async (req, res) => {
     }
   }
 
+  const io = req.app.get('io')
   const createdOrders = []
+
   for (const [vendorId, items] of byVendor) {
     const total = items.reduce((sum, i) => sum + getEffectivePrice(i.product, buyer?.role) * i.quantity, 0)
 
@@ -75,12 +80,31 @@ router.post('/', async (req, res) => {
     })
     createdOrders.push(order)
 
-    await notify(vendorId, 'নতুন অর্ডার এসেছে', `আপনি একটি নতুন অর্ডার পেয়েছেন। মোট: ৳${total}`, 'order_placed', order.id)
-    await notify(req.user!.id, 'অর্ডার সফল হয়েছে', `আপনার অর্ডার সফলভাবে দেওয়া হয়েছে। মোট: ৳${total}`, 'order_placed', order.id)
+    // Decrement stock
+    for (const item of items) {
+      await prisma.product.update({
+        where: { id: item.productId },
+        data: { stockQty: { decrement: item.quantity } },
+      })
+      await maybeNotifyLowStock(item.productId, io)
+    }
 
-    const io = req.app.get('io')
-    io.to(`user:${vendorId}`).emit('notification:new')
-    io.to(`user:${req.user!.id}`).emit('notification:new')
+    await notifyUser(
+      vendorId,
+      'নতুন অর্ডার এসেছে',
+      `আপনি একটি নতুন অর্ডার পেয়েছেন। মোট: ৳${total}`,
+      'order_placed',
+      order.id,
+      io,
+    )
+    await notifyUser(
+      req.user!.id,
+      'অর্ডার সফল হয়েছে',
+      `আপনার অর্ডার সফলভাবে দেওয়া হয়েছে। মোট: ৳${total}`,
+      'order_placed',
+      order.id,
+      io,
+    )
   }
 
   await prisma.cartItem.deleteMany({ where: { buyerId: req.user!.id } })
@@ -131,8 +155,15 @@ router.patch('/:id/status', requireRole('vendor', 'admin'), async (req, res) => 
     cancelled: 'আপনার অর্ডারটি বাতিল করা হয়েছে',
   }
   if (statusLabels[status]) {
-    await notify(order.buyerId, statusLabels[status], `অর্ডার #${order.id.slice(0, 8)} — বর্তমান অবস্থা আপডেট হয়েছে`, 'order_status', order.id)
-    req.app.get('io').to(`user:${order.buyerId}`).emit('notification:new')
+    const io = req.app.get('io')
+    await notifyUser(
+      order.buyerId,
+      statusLabels[status],
+      `অর্ডার #${order.id.slice(0, 8)} — বর্তমান অবস্থা আপডেট হয়েছে`,
+      'order_status',
+      order.id,
+      io,
+    )
   }
 
   res.json({ order: updated })
