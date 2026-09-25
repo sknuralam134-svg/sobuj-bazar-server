@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { prisma } from '../lib/prisma'
 import { requireAuth, requireRole } from '../middleware/auth'
+import { notifyUser } from '../lib/notify'
 
 const router = Router()
 router.use(requireAuth, requireRole('admin'))
@@ -47,6 +48,44 @@ router.get('/stats', async (_req, res) => {
     totalUsers, totalVendors, totalWholesale, totalProducts,
     totalOrders: orders.length, pendingOrders, deliveredOrders, revenue,
   })
+})
+
+/**
+ * Broadcast a notification to users.
+ * body: { title, message, target: 'all' | 'vendors' | 'buyers' | userId }
+ */
+router.post('/notify', async (req, res) => {
+  const { title, message, target } = req.body as {
+    title?: string
+    message?: string
+    target?: string
+  }
+
+  if (!title?.trim() || !message?.trim()) {
+    return res.status(400).json({ error: 'title এবং message দিতে হবে' })
+  }
+
+  let users: { id: string }[] = []
+  if (target === 'vendors') {
+    users = await prisma.user.findMany({ where: { role: 'vendor' }, select: { id: true } })
+  } else if (target === 'buyers') {
+    users = await prisma.user.findMany({
+      where: { role: { in: ['buyer', 'wholesale'] } },
+      select: { id: true },
+    })
+  } else if (target && target !== 'all') {
+    // treat as specific userId
+    users = [{ id: target }]
+  } else {
+    users = await prisma.user.findMany({ select: { id: true } })
+  }
+
+  const io = req.app.get('io')
+  await Promise.all(
+    users.map((u) => notifyUser(u.id, title.trim(), message.trim(), 'info', undefined, io)),
+  )
+
+  res.status(201).json({ sent: users.length })
 })
 
 export default router
