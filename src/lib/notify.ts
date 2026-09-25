@@ -1,13 +1,13 @@
 import type { Server } from 'socket.io'
 import { prisma } from './prisma'
-import { getMessaging } from './firebaseAdmin'
 
 export type NotifyType = 'order_placed' | 'order_status' | 'product_added' | 'low_stock' | 'info'
 
 const LOW_STOCK_THRESHOLD = 5
 
 /**
- * Create an in-app notification, emit Socket.io, and send FCM browser push.
+ * Create an in-app notification and emit live update over Socket.io.
+ * (No Firebase / FCM — realtime only while the client is connected.)
  */
 export async function notifyUser(
   userId: string,
@@ -27,72 +27,11 @@ export async function notifyUser(
       title,
       message,
       type,
+      orderId: orderId || null,
     })
   }
 
-  // Fire-and-forget FCM push (don't block the request on push failures)
-  sendFcmToUser(userId, title, message, type, orderId).catch((err) => {
-    console.error('[FCM] push failed for user', userId, err?.message || err)
-  })
-
   return notification
-}
-
-async function sendFcmToUser(
-  userId: string,
-  title: string,
-  message: string,
-  type: string,
-  orderId?: string,
-) {
-  const tokens = await prisma.fcmToken.findMany({ where: { userId } })
-  if (tokens.length === 0) return
-
-  let messaging
-  try {
-    messaging = getMessaging()
-  } catch {
-    // Firebase Admin not configured — skip push silently
-    return
-  }
-
-  const tokenStrings = tokens.map((t) => t.token)
-  const response = await messaging.sendEachForMulticast({
-    tokens: tokenStrings,
-    notification: { title, body: message },
-    data: {
-      type,
-      ...(orderId ? { orderId } : {}),
-      click_action: '/',
-    },
-    webpush: {
-      fcmOptions: { link: orderId ? '/orders' : '/' },
-      notification: {
-        title,
-        body: message,
-        icon: '/logo.svg',
-        badge: '/favicon.svg',
-      },
-    },
-  })
-
-  // Remove invalid / expired tokens
-  const toDelete: string[] = []
-  response.responses.forEach((r, i) => {
-    if (!r.success) {
-      const code = r.error?.code || ''
-      if (
-        code.includes('registration-token-not-registered') ||
-        code.includes('invalid-registration-token') ||
-        code.includes('invalid-argument')
-      ) {
-        toDelete.push(tokenStrings[i])
-      }
-    }
-  })
-  if (toDelete.length) {
-    await prisma.fcmToken.deleteMany({ where: { token: { in: toDelete } } })
-  }
 }
 
 /** Notify all admins. */
@@ -106,14 +45,8 @@ export async function notifyAdmins(
   await Promise.all(admins.map((a) => notifyUser(a.id, title, message, type, undefined, io)))
 }
 
-/**
- * After stock changes, if qty <= threshold notify the vendor once-ish
- * (we always send; vendor can mark read).
- */
-export async function maybeNotifyLowStock(
-  productId: string,
-  io?: Server,
-) {
+/** After stock changes, if qty <= threshold notify the vendor. */
+export async function maybeNotifyLowStock(productId: string, io?: Server) {
   const product = await prisma.product.findUnique({
     where: { id: productId },
     select: { id: true, name: true, stockQty: true, unit: true, vendorId: true },
