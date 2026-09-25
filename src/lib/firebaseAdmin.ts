@@ -32,13 +32,8 @@ function initFirebaseAdmin() {
   initialized = true
 }
 
+/** Used for phone / Google ID token verification only (not push). */
 export async function verifyFirebaseIdToken(idToken: string) {
   initFirebaseAdmin()
   return admin.auth().verifyIdToken(idToken)
-}
-
-/** Firebase Cloud Messaging — used for browser push notifications. */
-export function getMessaging() {
-  initFirebaseAdmin()
-  return admin.messaging()
 }
