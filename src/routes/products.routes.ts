@@ -5,6 +5,7 @@ import { requireAuth, requireRole, optionalAuth } from '../middleware/auth'
 import { isWithinDeliveryRange } from '../utils/distance'
 import { compressToUnder200KB } from '../lib/imageCompress'
 import { uploadImageToR2, r2Configured } from '../lib/r2'
+import { notifyAdmins, maybeNotifyLowStock } from '../lib/notify'
 
 const router = Router()
 
@@ -118,6 +119,20 @@ router.post('/', requireAuth, requireRole('vendor'), async (req, res) => {
       wholesaleMinQty: wholesaleMinQty || null,
     },
   })
+
+  const io = req.app.get('io')
+  const vendor = await prisma.user.findUnique({
+    where: { id: req.user!.id },
+    select: { fullName: true, shopName: true },
+  })
+  const shop = vendor?.shopName || vendor?.fullName || 'একজন বিক্রেতা'
+  await notifyAdmins(
+    'নতুন প্রোডাক্ট যোগ হয়েছে',
+    `${shop} নতুন প্রোডাক্ট যোগ করেছেন: ${name}`,
+    'product_added',
+    io,
+  )
+
   res.status(201).json({ product })
 })
 
@@ -141,6 +156,12 @@ router.put('/:id', requireAuth, requireRole('vendor', 'admin'), async (req, res)
       wholesaleMinQty: wholesaleMinQty ?? null,
     },
   })
+
+  const io = req.app.get('io')
+  if (stockQty != null) {
+    await maybeNotifyLowStock(product.id, io)
+  }
+
   res.json({ product })
 })
 
