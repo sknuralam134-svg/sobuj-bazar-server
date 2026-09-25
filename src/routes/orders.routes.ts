@@ -16,9 +16,34 @@ const orderInclude = {
 
 // POST /orders — checkout: groups the buyer's cart by vendor into separate orders.
 router.post('/', async (req, res) => {
-  const { deliveryAddress, deliveryPhone, deliveryNotes, paymentMethod } = req.body as {
-    deliveryAddress: string; deliveryPhone: string; deliveryNotes?: string; paymentMethod: 'cod' | 'online'
+  const {
+    deliveryAddress,
+    deliveryPhone,
+    deliveryNotes,
+    paymentMethod,
+    deliveryLatitude,
+    deliveryLongitude,
+  } = req.body as {
+    deliveryAddress: string
+    deliveryPhone: string
+    deliveryNotes?: string
+    paymentMethod: 'cod' | 'online'
+    deliveryLatitude?: number | null
+    deliveryLongitude?: number | null
   }
+
+  if (!deliveryAddress?.trim() || !deliveryPhone?.trim()) {
+    return res.status(400).json({ error: 'ডেলিভারি ঠিকানা ও ফোন নম্বর দিতে হবে' })
+  }
+
+  const lat =
+    deliveryLatitude != null && deliveryLatitude !== ('' as any)
+      ? Number(deliveryLatitude)
+      : null
+  const lng =
+    deliveryLongitude != null && deliveryLongitude !== ('' as any)
+      ? Number(deliveryLongitude)
+      : null
 
   const buyer = await prisma.user.findUnique({ where: { id: req.user!.id } })
   const cartItems = await prisma.cartItem.findMany({
@@ -65,8 +90,12 @@ router.post('/', async (req, res) => {
         buyerId: req.user!.id,
         vendorId,
         totalAmount: total,
-        deliveryAddress, deliveryPhone, deliveryNotes,
+        deliveryAddress: deliveryAddress.trim(),
+        deliveryPhone: deliveryPhone.trim(),
+        deliveryNotes: deliveryNotes?.trim() || null,
         paymentMethod,
+        deliveryLatitude: lat != null && !Number.isNaN(lat) ? lat : null,
+        deliveryLongitude: lng != null && !Number.isNaN(lng) ? lng : null,
         orderItems: {
           create: items.map((i) => ({
             productId: i.productId,

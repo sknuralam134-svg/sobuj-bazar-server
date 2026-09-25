@@ -147,6 +147,10 @@ model Order {
   deliveryNotes    String?
   paymentMethod    PaymentMethod @default(cod)
 
+  // Buyer GPS captured at checkout time (for delivery radius / maps)
+  deliveryLatitude  Float?
+  deliveryLongitude Float?
+
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
