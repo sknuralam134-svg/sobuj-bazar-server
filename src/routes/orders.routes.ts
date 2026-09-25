@@ -15,129 +15,152 @@ const orderInclude = {
 } as const
 
 // POST /orders — checkout: groups the buyer's cart by vendor into separate orders.
-router.post('/', async (req, res) => {
-  const {
-    deliveryAddress,
-    deliveryPhone,
-    deliveryNotes,
-    paymentMethod,
-    deliveryLatitude,
-    deliveryLongitude,
-  } = req.body as {
-    deliveryAddress: string
-    deliveryPhone: string
-    deliveryNotes?: string
-    paymentMethod: 'cod' | 'online'
-    deliveryLatitude?: number | null
-    deliveryLongitude?: number | null
-  }
-
-  if (!deliveryAddress?.trim() || !deliveryPhone?.trim()) {
-    return res.status(400).json({ error: 'ডেলিভারি ঠিকানা ও ফোন নম্বর দিতে হবে' })
-  }
-
-  const lat =
-    deliveryLatitude != null && deliveryLatitude !== ('' as any)
-      ? Number(deliveryLatitude)
-      : null
-  const lng =
-    deliveryLongitude != null && deliveryLongitude !== ('' as any)
-      ? Number(deliveryLongitude)
-      : null
-
-  const buyer = await prisma.user.findUnique({ where: { id: req.user!.id } })
-  const cartItems = await prisma.cartItem.findMany({
-    where: { buyerId: req.user!.id },
-    include: { product: true },
-  })
-  if (cartItems.length === 0) return res.status(400).json({ error: 'কার্ট খালি' })
-
-  // Stock check before creating orders
-  for (const item of cartItems) {
-    if (item.product.stockQty < item.quantity) {
-      return res.status(400).json({
-        error: `${item.product.name}-এ পর্যাপ্ত স্টক নেই (আছে: ${item.product.stockQty} ${item.product.unit})`,
-      })
+router.post('/', async (req, res, next) => {
+  try {
+    const {
+      deliveryAddress,
+      deliveryPhone,
+      deliveryNotes,
+      paymentMethod,
+      deliveryLatitude,
+      deliveryLongitude,
+    } = req.body as {
+      deliveryAddress: string
+      deliveryPhone: string
+      deliveryNotes?: string
+      paymentMethod: 'cod' | 'online'
+      deliveryLatitude?: number | null
+      deliveryLongitude?: number | null
     }
-  }
 
-  const byVendor = new Map<string, typeof cartItems>()
-  for (const item of cartItems) {
-    const list = byVendor.get(item.product.vendorId) || []
-    list.push(item)
-    byVendor.set(item.product.vendorId, list)
-  }
+    if (!deliveryAddress?.trim() || !deliveryPhone?.trim()) {
+      return res.status(400).json({ error: 'ডেলিভারি ঠিকানা ও ফোন নম্বর দিতে হবে' })
+    }
 
-  // Enforce wholesale minimum quantities before creating any orders.
-  if (buyer?.role === 'wholesale') {
+    const lat =
+      deliveryLatitude != null && deliveryLatitude !== ('' as any)
+        ? Number(deliveryLatitude)
+        : null
+    const lng =
+      deliveryLongitude != null && deliveryLongitude !== ('' as any)
+        ? Number(deliveryLongitude)
+        : null
+
+    const buyer = await prisma.user.findUnique({ where: { id: req.user!.id } })
+    const cartItems = await prisma.cartItem.findMany({
+      where: { buyerId: req.user!.id },
+      include: { product: true },
+    })
+    if (cartItems.length === 0) return res.status(400).json({ error: 'কার্ট খালি' })
+
     for (const item of cartItems) {
-      if (item.product.wholesaleMinQty && item.product.wholesalePrice != null && item.quantity < item.product.wholesaleMinQty) {
+      if (item.product.stockQty < item.quantity) {
         return res.status(400).json({
-          error: `${item.product.name}-এর জন্য সর্বনিম্ন ${item.product.wholesaleMinQty} ${item.product.unit} অর্ডার করতে হবে`,
+          error: `${item.product.name}-এ পর্যাপ্ত স্টক নেই (আছে: ${item.product.stockQty} ${item.product.unit})`,
         })
       }
     }
-  }
 
-  const io = req.app.get('io')
-  const createdOrders = []
-
-  for (const [vendorId, items] of byVendor) {
-    const total = items.reduce((sum, i) => sum + getEffectivePrice(i.product, buyer?.role) * i.quantity, 0)
-
-    const order = await prisma.order.create({
-      data: {
-        buyerId: req.user!.id,
-        vendorId,
-        totalAmount: total,
-        deliveryAddress: deliveryAddress.trim(),
-        deliveryPhone: deliveryPhone.trim(),
-        deliveryNotes: deliveryNotes?.trim() || null,
-        paymentMethod,
-        deliveryLatitude: lat != null && !Number.isNaN(lat) ? lat : null,
-        deliveryLongitude: lng != null && !Number.isNaN(lng) ? lng : null,
-        orderItems: {
-          create: items.map((i) => ({
-            productId: i.productId,
-            quantity: i.quantity,
-            priceAtPurchase: getEffectivePrice(i.product, buyer?.role),
-          })),
-        },
-        delivery: { create: { estimatedDelivery: new Date(Date.now() + 24 * 60 * 60 * 1000) } },
-      },
-      include: orderInclude,
-    })
-    createdOrders.push(order)
-
-    // Decrement stock
-    for (const item of items) {
-      await prisma.product.update({
-        where: { id: item.productId },
-        data: { stockQty: { decrement: item.quantity } },
-      })
-      await maybeNotifyLowStock(item.productId, io)
+    if (buyer?.role === 'wholesale') {
+      for (const item of cartItems) {
+        if (
+          item.product.wholesaleMinQty &&
+          item.product.wholesalePrice != null &&
+          item.quantity < item.product.wholesaleMinQty
+        ) {
+          return res.status(400).json({
+            error: `${item.product.name}-এর জন্য সর্বনিম্ন ${item.product.wholesaleMinQty} ${item.product.unit} অর্ডার করতে হবে`,
+          })
+        }
+      }
     }
 
-    await notifyUser(
-      vendorId,
-      'নতুন অর্ডার এসেছে',
-      `আপনি একটি নতুন অর্ডার পেয়েছেন। মোট: ৳${total}`,
-      'order_placed',
-      order.id,
-      io,
-    )
-    await notifyUser(
-      req.user!.id,
-      'অর্ডার সফল হয়েছে',
-      `আপনার অর্ডার সফলভাবে দেওয়া হয়েছে। মোট: ৳${total}`,
-      'order_placed',
-      order.id,
-      io,
-    )
-  }
+    const byVendor = new Map<string, typeof cartItems>()
+    for (const item of cartItems) {
+      const list = byVendor.get(item.product.vendorId) || []
+      list.push(item)
+      byVendor.set(item.product.vendorId, list)
+    }
 
-  await prisma.cartItem.deleteMany({ where: { buyerId: req.user!.id } })
-  res.status(201).json({ orders: createdOrders })
+    const io = req.app.get('io')
+    const productIdsForLowStock: string[] = []
+
+    // All order creates + stock updates + cart clear in one transaction
+    const createdOrders = await prisma.$transaction(async (tx) => {
+      const orders = []
+
+      for (const [vendorId, items] of byVendor) {
+        const total = items.reduce(
+          (sum, i) => sum + getEffectivePrice(i.product, buyer?.role) * i.quantity,
+          0,
+        )
+
+        const order = await tx.order.create({
+          data: {
+            buyerId: req.user!.id,
+            vendorId,
+            totalAmount: total,
+            deliveryAddress: deliveryAddress.trim(),
+            deliveryPhone: deliveryPhone.trim(),
+            deliveryNotes: deliveryNotes?.trim() || null,
+            paymentMethod,
+            deliveryLatitude: lat != null && !Number.isNaN(lat) ? lat : null,
+            deliveryLongitude: lng != null && !Number.isNaN(lng) ? lng : null,
+            orderItems: {
+              create: items.map((i) => ({
+                productId: i.productId,
+                quantity: i.quantity,
+                priceAtPurchase: getEffectivePrice(i.product, buyer?.role),
+              })),
+            },
+            delivery: {
+              create: { estimatedDelivery: new Date(Date.now() + 24 * 60 * 60 * 1000) },
+            },
+          },
+          include: orderInclude,
+        })
+        orders.push(order)
+
+        for (const item of items) {
+          await tx.product.update({
+            where: { id: item.productId },
+            data: { stockQty: { decrement: item.quantity } },
+          })
+          productIdsForLowStock.push(item.productId)
+        }
+      }
+
+      await tx.cartItem.deleteMany({ where: { buyerId: req.user!.id } })
+      return orders
+    })
+
+    // Notifications + low-stock checks outside the transaction
+    for (const order of createdOrders) {
+      await notifyUser(
+        order.vendorId,
+        'নতুন অর্ডার এসেছে',
+        `আপনি একটি নতুন অর্ডার পেয়েছেন। মোট: ৳${order.totalAmount}`,
+        'order_placed',
+        order.id,
+        io,
+      )
+      await notifyUser(
+        req.user!.id,
+        'অর্ডার সফল হয়েছে',
+        `আপনার অর্ডার সফলভাবে দেওয়া হয়েছে। মোট: ৳${order.totalAmount}`,
+        'order_placed',
+        order.id,
+        io,
+      )
+    }
+    for (const pid of [...new Set(productIdsForLowStock)]) {
+      await maybeNotifyLowStock(pid, io)
+    }
+
+    res.status(201).json({ orders: createdOrders })
+  } catch (err) {
+    next(err)
+  }
 })
 
 // GET /orders/mine — buyer's own orders
@@ -175,7 +198,11 @@ router.patch('/:id/status', requireRole('vendor', 'admin'), async (req, res) => 
     return res.status(403).json({ error: 'এই অর্ডার পরিবর্তনের অনুমতি নেই' })
   }
 
-  const updated = await prisma.order.update({ where: { id: req.params.id }, data: { status: status as any }, include: orderInclude })
+  const updated = await prisma.order.update({
+    where: { id: req.params.id },
+    data: { status: status as any },
+    include: orderInclude,
+  })
 
   const statusLabels: Record<string, string> = {
     confirmed: 'আপনার অর্ডার নিশ্চিত করা হয়েছে',

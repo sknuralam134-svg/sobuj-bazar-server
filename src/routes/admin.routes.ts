@@ -10,8 +10,21 @@ router.get('/users', async (_req, res) => {
   const users = await prisma.user.findMany({
     orderBy: { createdAt: 'desc' },
     select: {
-      id: true, email: true, fullName: true, phone: true, role: true,
-      shopName: true, createdAt: true,
+      id: true,
+      email: true,
+      fullName: true,
+      phone: true,
+      address: true,
+      city: true,
+      area: true,
+      role: true,
+      shopName: true,
+      shopDescription: true,
+      latitude: true,
+      longitude: true,
+      deliveryRadiusKm: true,
+      createdAt: true,
+      updatedAt: true,
     },
   })
   res.json({ users })
@@ -74,7 +87,6 @@ router.post('/notify', async (req, res) => {
       select: { id: true },
     })
   } else if (target && target !== 'all') {
-    // treat as specific userId
     users = [{ id: target }]
   } else {
     users = await prisma.user.findMany({ select: { id: true } })
