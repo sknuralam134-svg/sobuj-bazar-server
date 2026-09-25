@@ -15,6 +15,7 @@ import notificationRoutes from './routes/notifications.routes'
 import adminRoutes from './routes/admin.routes'
 import profileRoutes from './routes/profile.routes'
 import settingsRoutes from './routes/settings.routes'
+import geoRoutes from './routes/geo.routes'
 
 const app = express()
 const server = http.createServer(app)
@@ -75,6 +76,7 @@ app.use('/notifications', notificationRoutes)
 app.use('/admin', adminRoutes)
 app.use('/profile', profileRoutes)
 app.use('/settings', settingsRoutes)
+app.use('/geo', geoRoutes)
 
 // Central error handler — keeps error shapes consistent across routes.
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
