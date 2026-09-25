@@ -1,9 +1,24 @@
 import { Router } from 'express'
+import multer from 'multer'
 import { prisma } from '../lib/prisma'
 import { requireAuth, requireRole, optionalAuth } from '../middleware/auth'
 import { isWithinDeliveryRange } from '../utils/distance'
+import { compressToUnder200KB } from '../lib/imageCompress'
+import { uploadImageToR2, r2Configured } from '../lib/r2'
 
 const router = Router()
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB raw max before compress
+  fileFilter: (_req, file, cb) => {
+    if (/^image\/(jpeg|jpg|png|webp|gif|heic|heif)$/i.test(file.mimetype)) {
+      cb(null, true)
+    } else {
+      cb(new Error('শুধুমাত্র ছবি ফাইল (JPEG, PNG, WebP, GIF) আপলোড করা যাবে') as any)
+    }
+  },
+})
 
 const vendorSelect = {
   id: true, fullName: true, shopName: true, latitude: true, longitude: true, deliveryRadiusKm: true,
@@ -28,6 +43,47 @@ router.get('/', optionalAuth, async (req, res) => {
 
   res.json({ products: filtered, totalBeforeFilter: products.length })
 })
+
+// POST /products/upload-image — vendor uploads product image → R2 (compressed ≤ 200 KB)
+// Must be registered before /:id so "upload-image" is not treated as an id.
+router.post(
+  '/upload-image',
+  requireAuth,
+  requireRole('vendor', 'admin'),
+  (req, res, next) => {
+    upload.single('image')(req, res, (err) => {
+      if (err) {
+        const msg = err.message || 'ফাইল আপলোড ব্যর্থ'
+        return res.status(400).json({ error: msg })
+      }
+      next()
+    })
+  },
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'কোনো ছবি পাঠানো হয়নি' })
+      }
+      if (!r2Configured) {
+        return res.status(503).json({
+          error: 'ছবি আপলোড সার্ভিস এখনো কনফিগার করা হয়নি। অ্যাডমিনকে R2 env সেট করতে বলুন।',
+        })
+      }
+
+      const compressed = await compressToUnder200KB(req.file.buffer)
+      const url = await uploadImageToR2(compressed, 'image/webp')
+
+      res.status(201).json({
+        url,
+        sizeBytes: compressed.length,
+        sizeKb: Math.round(compressed.length / 1024),
+      })
+    } catch (err: any) {
+      console.error('Image upload error:', err)
+      res.status(err.status || 500).json({ error: err.message || 'ছবি আপলোড ব্যর্থ হয়েছে' })
+    }
+  }
+)
 
 router.get('/:id', async (req, res) => {
   const product = await prisma.product.findUnique({
