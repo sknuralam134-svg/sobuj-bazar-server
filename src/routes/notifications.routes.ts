@@ -26,4 +26,31 @@ router.patch('/read-all', async (req, res) => {
   res.status(204).end()
 })
 
+/** Save browser FCM token for push notifications (one user can have multiple devices). */
+router.post('/fcm-token', async (req, res) => {
+  const { token } = req.body as { token?: string }
+  if (!token || typeof token !== 'string' || token.length < 20) {
+    return res.status(400).json({ error: 'সঠিক FCM token দিন' })
+  }
+
+  await prisma.fcmToken.upsert({
+    where: { token },
+    create: { userId: req.user!.id, token },
+    update: { userId: req.user!.id, updatedAt: new Date() },
+  })
+
+  res.status(201).json({ ok: true })
+})
+
+/** Remove FCM token (e.g. on logout or permission revoked). */
+router.delete('/fcm-token', async (req, res) => {
+  const { token } = req.body as { token?: string }
+  if (token) {
+    await prisma.fcmToken.deleteMany({ where: { token, userId: req.user!.id } })
+  } else {
+    await prisma.fcmToken.deleteMany({ where: { userId: req.user!.id } })
+  }
+  res.status(204).end()
+})
+
 export default router
