@@ -75,21 +75,8 @@ model User {
   buyerOrders       Order[]         @relation("BuyerOrders")
   vendorOrders      Order[]         @relation("VendorOrders")
   notifications     Notification[]
-  fcmTokens         FcmToken[]
 
   @@map("users")
-}
-
-model FcmToken {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  token     String   @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([userId])
-  @@map("fcm_tokens")
 }
 
 model Category {
