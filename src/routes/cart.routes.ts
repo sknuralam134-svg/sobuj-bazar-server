@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { prisma } from '../lib/prisma'
 import { requireAuth } from '../middleware/auth'
+import { msg } from '../lib/i18n'
 
 const router = Router()
 router.use(requireAuth)
@@ -28,7 +29,7 @@ router.post('/', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   const { quantity } = req.body as { quantity: number }
   const item = await prisma.cartItem.findUnique({ where: { id: req.params.id } })
-  if (!item || item.buyerId !== req.user!.id) return res.status(404).json({ error: 'পাওয়া যায়নি' })
+  if (!item || item.buyerId !== req.user!.id) return res.status(404).json({ error: msg(req, 'cart.notFound') })
 
   if (quantity <= 0) {
     await prisma.cartItem.delete({ where: { id: req.params.id } })
@@ -40,7 +41,7 @@ router.patch('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   const item = await prisma.cartItem.findUnique({ where: { id: req.params.id } })
-  if (!item || item.buyerId !== req.user!.id) return res.status(404).json({ error: 'পাওয়া যায়নি' })
+  if (!item || item.buyerId !== req.user!.id) return res.status(404).json({ error: msg(req, 'cart.notFound') })
   await prisma.cartItem.delete({ where: { id: req.params.id } })
   res.status(204).end()
 })

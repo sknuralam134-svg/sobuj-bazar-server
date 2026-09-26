@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { prisma } from '../lib/prisma'
 import { requireAuth } from '../middleware/auth'
+import { msg } from '../lib/i18n'
 
 const router = Router()
 router.use(requireAuth)
@@ -52,10 +53,7 @@ router.put('/', async (req, res, next) => {
     if (err?.code === 'P2002') {
       const target = Array.isArray(err?.meta?.target) ? err.meta.target.join(', ') : 'field'
       return res.status(409).json({
-        error:
-          target.includes('phone')
-            ? 'এই ফোন নম্বরটি ইতিমধ্যে অন্য অ্যাকাউন্টে ব্যবহার করা হয়েছে'
-            : 'এই তথ্য ইতিমধ্যে অন্য অ্যাকাউন্টে আছে',
+        error: msg(req, target.includes('phone') ? 'profile.phoneInUse' : 'profile.dataInUse'),
       })
     }
     next(err)

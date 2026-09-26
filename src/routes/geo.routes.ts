@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { msg } from '../lib/i18n'
 
 const router = Router()
 
@@ -12,10 +13,10 @@ router.get('/reverse', async (req, res) => {
   const lng = Number(req.query.lng)
 
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-    return res.status(400).json({ error: 'lat ও lng দরকার' })
+    return res.status(400).json({ error: msg(req, 'geo.latLngRequired') })
   }
   if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-    return res.status(400).json({ error: 'অবৈধ কো-অর্ডিনেট' })
+    return res.status(400).json({ error: msg(req, 'geo.invalidCoords') })
   }
 
   try {
@@ -30,7 +31,7 @@ router.get('/reverse', async (req, res) => {
     })
 
     if (!upstream.ok) {
-      return res.status(502).json({ error: 'ঠিকানা খুঁজে পাওয়া যায়নি' })
+      return res.status(502).json({ error: msg(req, 'geo.addressLookupFailed') })
     }
 
     const data: any = await upstream.json()
@@ -52,13 +53,13 @@ router.get('/reverse', async (req, res) => {
     }
 
     if (!address) {
-      return res.status(404).json({ error: 'এই লোকেশনের ঠিকানা পাওয়া যায়নি' })
+      return res.status(404).json({ error: msg(req, 'geo.addressNotFound') })
     }
 
     return res.json({ address, lat, lng })
   } catch (err) {
     console.error('[geo/reverse]', err)
-    return res.status(502).json({ error: 'ঠিকানা সার্ভিস কাজ করছে না' })
+    return res.status(502).json({ error: msg(req, 'geo.serviceDown') })
   }
 })
 
