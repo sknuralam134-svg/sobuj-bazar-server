@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express'
 import jwt from 'jsonwebtoken'
+import { msg } from '../lib/i18n'
 
 export type AuthUser = { id: string; role: string; email: string }
 
@@ -25,13 +26,13 @@ export function verifyToken(token: string): AuthUser {
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization
   if (!header?.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'লগইন প্রয়োজন' })
+    return res.status(401).json({ error: msg(req, 'auth.loginRequired') })
   }
   try {
     req.user = verifyToken(header.slice(7))
     next()
   } catch {
-    return res.status(401).json({ error: 'সেশন মেয়াদোত্তীর্ণ, আবার লগইন করুন' })
+    return res.status(401).json({ error: msg(req, 'auth.sessionExpired') })
   }
 }
 
@@ -52,7 +53,7 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
 export function requireRole(...roles: string[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user || !roles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'এই কাজের অনুমতি আপনার নেই' })
+      return res.status(403).json({ error: msg(req, 'auth.noPermission') })
     }
     next()
   }

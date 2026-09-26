@@ -6,6 +6,7 @@ import { requireAuth } from '../middleware/auth'
 import { sendOtpEmail, sendPasswordResetEmail } from '../lib/email'
 import { signToken } from '../middleware/auth'
 import { verifyFirebaseIdToken } from '../lib/firebaseAdmin'
+import { msg } from '../lib/i18n'
 
 const router = Router()
 
@@ -47,19 +48,21 @@ router.post('/register', async (req, res, next) => {
     const normalizedEmail = email?.trim().toLowerCase()
 
     if (!normalizedEmail || !password || !fullName?.trim()) {
-      return res.status(400).json({ error: 'ইমেইল, পাসওয়ার্ড ও নাম দিতে হবে' })
+      return res.status(400).json({ error: msg(req, 'auth.needEmailPasswordName') })
     }
     if (password.length < 8) {
-      return res.status(400).json({ error: 'পাসওয়ার্ড কমপক্ষে ৮ অক্ষরের হতে হবে' })
+      return res.status(400).json({ error: msg(req, 'auth.passwordTooShort') })
     }
     if (!['buyer', 'vendor', 'wholesale'].includes(role)) {
-      return res.status(400).json({ error: 'অবৈধ ইউজার রোল' })
+      return res.status(400).json({ error: msg(req, 'auth.invalidRole') })
     }
 
     const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } })
     if (existing) {
       return res.status(409).json({
-        error: existing.emailVerified ? 'এই ইমেইল দিয়ে অ্যাকাউন্ট ইতিমধ্যে আছে' : 'এই ইমেইল ইতিমধ্যে নিবন্ধিত, OTP আবার পাঠানো হচ্ছে',
+        error: existing.emailVerified
+          ? msg(req, 'auth.accountExistsVerified')
+          : msg(req, 'auth.accountExistsUnverified'),
       })
     }
 
@@ -89,7 +92,7 @@ router.post('/register', async (req, res, next) => {
     }
 
     return res.status(201).json({
-      message: 'অ্যাকাউন্ট তৈরি হয়েছে। ইমেইলে পাঠানো OTP দিয়ে ভেরিফাই করুন।',
+      message: msg(req, 'auth.accountCreated'),
       user: publicUser(user),
     })
   } catch (err) {
@@ -103,20 +106,20 @@ router.post('/verify-otp', async (req, res, next) => {
     const normalizedEmail = email?.trim().toLowerCase()
 
     if (!normalizedEmail || !token) {
-      return res.status(400).json({ error: 'ইমেইল ও OTP দিতে হবে' })
+      return res.status(400).json({ error: msg(req, 'auth.needEmailOtp') })
     }
 
     const user = await prisma.user.findUnique({ where: { email: normalizedEmail } })
-    if (!user) return res.status(404).json({ error: 'অ্যাকাউন্ট পাওয়া যায়নি' })
-    if (user.emailVerified) return res.status(400).json({ error: 'ইমেইল ইতিমধ্যে ভেরিফাই করা হয়েছে' })
+    if (!user) return res.status(404).json({ error: msg(req, 'auth.accountNotFound') })
+    if (user.emailVerified) return res.status(400).json({ error: msg(req, 'auth.alreadyVerified') })
     if (!user.otpCodeHash || !user.otpExpiresAt) {
-      return res.status(400).json({ error: 'OTP পাওয়া যায়নি। নতুন OTP নিন' })
+      return res.status(400).json({ error: msg(req, 'auth.otpNotFound') })
     }
     if (user.otpExpiresAt.getTime() < Date.now()) {
-      return res.status(400).json({ error: 'OTP-এর মেয়াদ শেষ। নতুন OTP নিন' })
+      return res.status(400).json({ error: msg(req, 'auth.otpExpired') })
     }
     if (user.otpAttempts >= MAX_OTP_ATTEMPTS) {
-      return res.status(429).json({ error: 'অনেকবার ভুল OTP দেওয়া হয়েছে। নতুন OTP নিন' })
+      return res.status(429).json({ error: msg(req, 'auth.tooManyAttempts') })
     }
 
     const valid = hashValue(token.trim()) === user.otpCodeHash
@@ -125,7 +128,7 @@ router.post('/verify-otp', async (req, res, next) => {
         where: { id: user.id },
         data: { otpAttempts: { increment: 1 } },
       })
-      return res.status(400).json({ error: 'ভুল OTP' })
+      return res.status(400).json({ error: msg(req, 'auth.wrongOtp') })
     }
 
     const verifiedUser = await prisma.user.update({
@@ -139,7 +142,7 @@ router.post('/verify-otp', async (req, res, next) => {
     })
 
     return res.json({
-      message: 'ইমেইল ভেরিফাই হয়েছে',
+      message: msg(req, 'auth.emailVerified'),
       token: signToken(toAuthUser(verifiedUser)),
       user: publicUser(verifiedUser),
     })
@@ -152,11 +155,11 @@ router.post('/resend-otp', async (req, res, next) => {
   try {
     const { email } = req.body as { email?: string }
     const normalizedEmail = email?.trim().toLowerCase()
-    if (!normalizedEmail) return res.status(400).json({ error: 'ইমেইল দিতে হবে' })
+    if (!normalizedEmail) return res.status(400).json({ error: msg(req, 'auth.needEmail') })
 
     const user = await prisma.user.findUnique({ where: { email: normalizedEmail } })
-    if (!user) return res.status(404).json({ error: 'অ্যাকাউন্ট পাওয়া যায়নি' })
-    if (user.emailVerified) return res.status(400).json({ error: 'ইমেইল ইতিমধ্যে ভেরিফাই করা হয়েছে' })
+    if (!user) return res.status(404).json({ error: msg(req, 'auth.accountNotFound') })
+    if (user.emailVerified) return res.status(400).json({ error: msg(req, 'auth.alreadyVerified') })
 
     const code = generateOtp()
     await prisma.user.update({
@@ -178,7 +181,7 @@ router.post('/resend-otp', async (req, res, next) => {
       throw emailError
     }
 
-    return res.json({ message: 'নতুন OTP ইমেইলে পাঠানো হয়েছে' })
+    return res.json({ message: msg(req, 'auth.otpResent') })
   } catch (err) {
     next(err)
   }
@@ -190,17 +193,17 @@ router.post('/login', async (req, res, next) => {
     const normalizedEmail = email?.trim().toLowerCase()
 
     if (!normalizedEmail || !password) {
-      return res.status(400).json({ error: 'ইমেইল ও পাসওয়ার্ড দিতে হবে' })
+      return res.status(400).json({ error: msg(req, 'auth.needEmailPassword') })
     }
 
     const user = await prisma.user.findUnique({ where: { email: normalizedEmail } })
     if (!user || !user.passwordHash) {
-      return res.status(401).json({ error: 'ইমেইল বা পাসওয়ার্ড ভুল' })
+      return res.status(401).json({ error: msg(req, 'auth.wrongCredentials') })
     }
 
     const valid = await bcrypt.compare(password, user.passwordHash)
-    if (!valid) return res.status(401).json({ error: 'ইমেইল বা পাসওয়ার্ড ভুল' })
-    if (!user.emailVerified) return res.status(403).json({ error: 'আগে ইমেইল ভেরিফাই করুন' })
+    if (!valid) return res.status(401).json({ error: msg(req, 'auth.wrongCredentials') })
+    if (!user.emailVerified) return res.status(403).json({ error: msg(req, 'auth.verifyEmailFirst') })
 
     return res.json({ token: signToken(toAuthUser(user)), user: publicUser(user) })
   } catch (err) {
@@ -213,7 +216,7 @@ router.post('/phone', async (req, res, next) => {
   try {
     const { idToken, fullName } = req.body as { idToken?: string; fullName?: string }
     if (!idToken?.trim()) {
-      return res.status(400).json({ error: 'Firebase idToken দিতে হবে' })
+      return res.status(400).json({ error: msg(req, 'auth.needFirebaseToken') })
     }
 
     let decoded: { uid: string; phone_number?: string; name?: string }
@@ -221,12 +224,12 @@ router.post('/phone', async (req, res, next) => {
       decoded = await verifyFirebaseIdToken(idToken.trim())
     } catch (err: any) {
       console.error('[auth/phone] token verify failed', err?.message || err)
-      return res.status(401).json({ error: 'অবৈধ বা মেয়াদোত্তীর্ণ ফোন ভেরিফিকেশন' })
+      return res.status(401).json({ error: msg(req, 'auth.invalidPhoneAuth') })
     }
 
     const phone = decoded.phone_number?.trim()
     if (!phone) {
-      return res.status(400).json({ error: 'ফোন নম্বর পাওয়া যায়নি। আবার OTP দিন।' })
+      return res.status(400).json({ error: msg(req, 'auth.noPhoneFound') })
     }
 
     const name = fullName?.trim() || decoded.name?.trim() || `User ${phone.slice(-4)}`
@@ -260,7 +263,7 @@ router.post('/phone', async (req, res, next) => {
     }
 
     return res.json({
-      message: 'ফোন দিয়ে লগইন সফল',
+      message: msg(req, 'auth.phoneLoginSuccess'),
       token: signToken(toAuthUser(user)),
       user: publicUser(user),
     })
@@ -274,7 +277,7 @@ router.post('/google', async (req, res, next) => {
   try {
     const { idToken } = req.body as { idToken?: string }
     if (!idToken?.trim()) {
-      return res.status(400).json({ error: 'Firebase idToken দিতে হবে' })
+      return res.status(400).json({ error: msg(req, 'auth.needFirebaseToken') })
     }
 
     let decoded: {
@@ -288,12 +291,12 @@ router.post('/google', async (req, res, next) => {
       decoded = await verifyFirebaseIdToken(idToken.trim())
     } catch (err: any) {
       console.error('[auth/google] token verify failed', err?.message || err)
-      return res.status(401).json({ error: 'অবৈধ বা মেয়াদোত্তীর্ণ Google লগইন' })
+      return res.status(401).json({ error: msg(req, 'auth.invalidGoogleAuth') })
     }
 
     const email = decoded.email?.trim().toLowerCase()
     if (!email) {
-      return res.status(400).json({ error: 'Google অ্যাকাউন্ট থেকে ইমেইল পাওয়া যায়নি' })
+      return res.status(400).json({ error: msg(req, 'auth.noGoogleEmail') })
     }
 
     const name = decoded.name?.trim() || email.split('@')[0]
@@ -326,7 +329,7 @@ router.post('/google', async (req, res, next) => {
     }
 
     return res.json({
-      message: 'Google দিয়ে লগইন সফল',
+      message: msg(req, 'auth.googleLoginSuccess'),
       token: signToken(toAuthUser(user)),
       user: publicUser(user),
     })
@@ -339,11 +342,11 @@ router.post('/forgot-password', async (req, res, next) => {
   try {
     const { email } = req.body as { email?: string }
     const normalizedEmail = email?.trim().toLowerCase()
-    if (!normalizedEmail) return res.status(400).json({ error: 'ইমেইল দিতে হবে' })
+    if (!normalizedEmail) return res.status(400).json({ error: msg(req, 'auth.needEmail') })
 
     const user = await prisma.user.findUnique({ where: { email: normalizedEmail } })
     if (!user || !user.passwordHash) {
-      return res.json({ message: 'যদি এই ইমেইলটি নিবন্ধিত থাকে, রিসেট লিংক পাঠানো হবে' })
+      return res.json({ message: msg(req, 'auth.resetLinkIfRegistered') })
     }
 
     const rawToken = crypto.randomBytes(32).toString('hex')
@@ -359,7 +362,7 @@ router.post('/forgot-password', async (req, res, next) => {
     const resetUrl = `${frontendUrl || 'http://localhost:5173'}/reset-password?token=${encodeURIComponent(rawToken)}&email=${encodeURIComponent(normalizedEmail)}`
     await sendPasswordResetEmail(normalizedEmail, resetUrl)
 
-    return res.json({ message: 'রিসেট লিংক ইমেইলে পাঠানো হয়েছে' })
+    return res.json({ message: msg(req, 'auth.resetLinkSent') })
   } catch (err) {
     next(err)
   }
@@ -371,18 +374,18 @@ router.post('/reset-password', async (req, res, next) => {
     const normalizedEmail = email?.trim().toLowerCase()
 
     if (!normalizedEmail || !token || !password) {
-      return res.status(400).json({ error: 'ইমেইল, রিসেট টোকেন ও নতুন পাসওয়ার্ড দিতে হবে' })
+      return res.status(400).json({ error: msg(req, 'auth.needResetFields') })
     }
     if (password.length < 8) {
-      return res.status(400).json({ error: 'পাসওয়ার্ড কমপক্ষে ৮ অক্ষরের হতে হবে' })
+      return res.status(400).json({ error: msg(req, 'auth.passwordTooShort') })
     }
 
     const user = await prisma.user.findUnique({ where: { email: normalizedEmail } })
     if (!user || !user.resetTokenHash || !user.resetTokenExpires) {
-      return res.status(400).json({ error: 'অবৈধ বা মেয়াদোত্তীর্ণ রিসেট লিংক' })
+      return res.status(400).json({ error: msg(req, 'auth.invalidResetLink') })
     }
     if (user.resetTokenExpires.getTime() < Date.now() || hashValue(token) !== user.resetTokenHash) {
-      return res.status(400).json({ error: 'অবৈধ বা মেয়াদোত্তীর্ণ রিসেট লিংক' })
+      return res.status(400).json({ error: msg(req, 'auth.invalidResetLink') })
     }
 
     const passwordHash = await bcrypt.hash(password, 12)
@@ -395,7 +398,7 @@ router.post('/reset-password', async (req, res, next) => {
       },
     })
 
-    return res.json({ message: 'পাসওয়ার্ড সফলভাবে পরিবর্তন হয়েছে', user: publicUser(updated) })
+    return res.json({ message: msg(req, 'auth.passwordChanged'), user: publicUser(updated) })
   } catch (err) {
     next(err)
   }
@@ -404,7 +407,7 @@ router.post('/reset-password', async (req, res, next) => {
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({ where: { id: req.user!.id } })
-    if (!user) return res.status(404).json({ error: 'ইউজার পাওয়া যায়নি' })
+    if (!user) return res.status(404).json({ error: msg(req, 'auth.userNotFound') })
     return res.json({ user: publicUser(user) })
   } catch (err) {
     next(err)
@@ -414,7 +417,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
 router.delete('/account', requireAuth, async (req, res, next) => {
   try {
     await prisma.user.delete({ where: { id: req.user!.id } })
-    return res.json({ message: 'অ্যাকাউন্ট মুছে ফেলা হয়েছে' })
+    return res.json({ message: msg(req, 'auth.accountDeleted') })
   } catch (err) {
     next(err)
   }

@@ -5,6 +5,7 @@ import http from 'http'
 import { Server } from 'socket.io'
 import { verifyToken } from './middleware/auth'
 import { toCamelCase, toSnakeCase } from './utils/caseConvert'
+import { msg } from './lib/i18n'
 
 import authRoutes from './routes/auth.routes'
 import productRoutes from './routes/products.routes'
@@ -79,12 +80,12 @@ app.use('/settings', settingsRoutes)
 app.use('/geo', geoRoutes)
 
 // Central error handler — keeps error shapes consistent across routes.
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(err)
-  res.status(err.status || 500).json({ error: err.message || 'সার্ভার এরর হয়েছে' })
+  res.status(err.status || 500).json({ error: err.message || msg(req, 'server.genericError') })
 })
 
 const PORT = process.env.PORT || 4000
 server.listen(PORT, () => {
-  console.log(`সবুজ বাজার API চলছে পোর্ট ${PORT}-এ`)
+  console.log(`সবুজ বাজার API চলছে পোর্ট ${PORT}-ে`)
 })

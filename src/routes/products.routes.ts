@@ -6,17 +6,18 @@ import { isWithinDeliveryRange } from '../utils/distance'
 import { compressToUnder200KB } from '../lib/imageCompress'
 import { uploadImageToR2, r2Configured } from '../lib/r2'
 import { notifyAdmins, maybeNotifyLowStock } from '../lib/notify'
+import { msg } from '../lib/i18n'
 
 const router = Router()
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB raw max before compress
-  fileFilter: (_req, file, cb) => {
+  fileFilter: (req, file, cb) => {
     if (/^image\/(jpeg|jpg|png|webp|gif|heic|heif)$/i.test(file.mimetype)) {
       cb(null, true)
     } else {
-      cb(new Error('শুধুমাত্র ছবি ফাইল (JPEG, PNG, WebP, GIF) আপলোড করা যাবে') as any)
+      cb(new Error(msg(req, 'products.imageTypeError')) as any)
     }
   },
 })
@@ -54,8 +55,8 @@ router.post(
   (req, res, next) => {
     upload.single('image')(req, res, (err) => {
       if (err) {
-        const msg = err.message || 'ফাইল আপলোড ব্যর্থ'
-        return res.status(400).json({ error: msg })
+        const m = err.message || msg(req, 'products.uploadFailedGeneric')
+        return res.status(400).json({ error: m })
       }
       next()
     })
@@ -63,11 +64,11 @@ router.post(
   async (req, res) => {
     try {
       if (!req.file) {
-        return res.status(400).json({ error: 'কোনো ছবি পাঠানো হয়নি' })
+        return res.status(400).json({ error: msg(req, 'products.noImageSent') })
       }
       if (!r2Configured) {
         return res.status(503).json({
-          error: 'ছবি আপলোড সার্ভিস এখনো কনফিগার করা হয়নি। অ্যাডমিনকে R2 env সেট করতে বলুন।',
+          error: msg(req, 'products.imageServiceNotConfigured'),
         })
       }
 
@@ -81,7 +82,7 @@ router.post(
       })
     } catch (err: any) {
       console.error('Image upload error:', err)
-      res.status(err.status || 500).json({ error: err.message || 'ছবি আপলোড ব্যর্থ হয়েছে' })
+      res.status(err.status || 500).json({ error: err.message || msg(req, 'products.uploadFailed') })
     }
   }
 )
@@ -91,7 +92,7 @@ router.get('/:id', async (req, res) => {
     where: { id: req.params.id },
     include: { category: true, vendor: { select: vendorSelect } },
   })
-  if (!product) return res.status(404).json({ error: 'প্রোডাক্ট পাওয়া যায়নি' })
+  if (!product) return res.status(404).json({ error: msg(req, 'products.notFound') })
   res.json({ product })
 })
 
@@ -125,10 +126,13 @@ router.post('/', requireAuth, requireRole('vendor'), async (req, res) => {
     where: { id: req.user!.id },
     select: { fullName: true, shopName: true },
   })
-  const shop = vendor?.shopName || vendor?.fullName || 'একজন বিক্রেতা'
+  const shopBn = vendor?.shopName || vendor?.fullName || 'একজন বিক্রেতা'
+  const shopEn = vendor?.shopName || vendor?.fullName || 'A vendor'
   await notifyAdmins(
-    'নতুন প্রোডাক্ট যোগ হয়েছে',
-    `${shop} নতুন প্রোডাক্ট যোগ করেছেন: ${name}`,
+    {
+      bn: { title: 'নতুন প্রোডাক্ট যোগ হয়েছে', message: `${shopBn} নতুন প্রোডাক্ট যোগ করেছেন: ${name}` },
+      en: { title: 'New product added', message: `${shopEn} added a new product: ${name}` },
+    },
     'product_added',
     io,
   )
@@ -138,9 +142,9 @@ router.post('/', requireAuth, requireRole('vendor'), async (req, res) => {
 
 router.put('/:id', requireAuth, requireRole('vendor', 'admin'), async (req, res) => {
   const existing = await prisma.product.findUnique({ where: { id: req.params.id } })
-  if (!existing) return res.status(404).json({ error: 'প্রোডাক্ট পাওয়া যায়নি' })
+  if (!existing) return res.status(404).json({ error: msg(req, 'products.notFound') })
   if (req.user!.role !== 'admin' && existing.vendorId !== req.user!.id) {
-    return res.status(403).json({ error: 'এই প্রোডাক্ট সম্পাদনার অনুমতি নেই' })
+    return res.status(403).json({ error: msg(req, 'products.notAllowedEdit') })
   }
 
   const { name, categoryId, price, unit, stockQty, description, imageUrl, isAvailable, wholesalePrice, wholesaleMinQty } = req.body
@@ -167,9 +171,9 @@ router.put('/:id', requireAuth, requireRole('vendor', 'admin'), async (req, res)
 
 router.delete('/:id', requireAuth, requireRole('vendor', 'admin'), async (req, res) => {
   const existing = await prisma.product.findUnique({ where: { id: req.params.id } })
-  if (!existing) return res.status(404).json({ error: 'প্রোডাক্ট পাওয়া যায়নি' })
+  if (!existing) return res.status(404).json({ error: msg(req, 'products.notFound') })
   if (req.user!.role !== 'admin' && existing.vendorId !== req.user!.id) {
-    return res.status(403).json({ error: 'এই প্রোডাক্ট মোছার অনুমতি নেই' })
+    return res.status(403).json({ error: msg(req, 'products.notAllowedDelete') })
   }
   await prisma.product.delete({ where: { id: req.params.id } })
   res.status(204).end()

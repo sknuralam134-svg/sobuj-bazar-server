@@ -197,6 +197,11 @@ model Notification {
   user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   title     String
   message   String
+  // English translations, populated alongside the Bengali title/message above.
+  // Nullable so older rows created before this field existed still work —
+  // the API/frontend fall back to the Bengali text when these are null.
+  titleEn   String?
+  messageEn String?
   type      NotificationType @default(info)
   orderId   String?
   order     Order?           @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -211,7 +216,7 @@ model SiteSettings {
   id             Int      @id @default(1)
   contactPhone   String   @default("+91 9733010828")
   contactEmail   String   @default("info@sobujbazar.com")
-  address        String   @default("গোকর্ণ, মুর্শিদাবাদ, পশ্চিমবঙ্গ, ৭৪২১৩৬")
+  address        String   @default("গোকর্ণ, মুর্শিদাবাদ, পশ্চিমবঙ্গ, ৭২১৩৬")
   businessHours  String   @default("প্রতিদিন সকাল ৮টা - রাত ৯টা")
   facebookUrl    String?
   instagramUrl   String?

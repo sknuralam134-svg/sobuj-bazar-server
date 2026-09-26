@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma'
 import { requireAuth, requireRole } from '../middleware/auth'
 import { getEffectivePrice } from '../utils/pricing'
 import { notifyUser, maybeNotifyLowStock } from '../lib/notify'
+import { msg } from '../lib/i18n'
 
 const router = Router()
 router.use(requireAuth)
@@ -34,7 +35,7 @@ router.post('/', async (req, res, next) => {
     }
 
     if (!deliveryAddress?.trim() || !deliveryPhone?.trim()) {
-      return res.status(400).json({ error: 'ডেলিভারি ঠিকানা ও ফোন নম্বর দিতে হবে' })
+      return res.status(400).json({ error: msg(req, 'orders.needAddressPhone') })
     }
 
     const lat =
@@ -51,12 +52,16 @@ router.post('/', async (req, res, next) => {
       where: { buyerId: req.user!.id },
       include: { product: true },
     })
-    if (cartItems.length === 0) return res.status(400).json({ error: 'কার্ট খালি' })
+    if (cartItems.length === 0) return res.status(400).json({ error: msg(req, 'orders.cartEmpty') })
 
     for (const item of cartItems) {
       if (item.product.stockQty < item.quantity) {
         return res.status(400).json({
-          error: `${item.product.name}-এ পর্যাপ্ত স্টক নেই (আছে: ${item.product.stockQty} ${item.product.unit})`,
+          error: msg(req, 'orders.insufficientStock', {
+            name: item.product.name,
+            qty: item.product.stockQty,
+            unit: item.product.unit,
+          }),
         })
       }
     }
@@ -69,7 +74,11 @@ router.post('/', async (req, res, next) => {
           item.quantity < item.product.wholesaleMinQty
         ) {
           return res.status(400).json({
-            error: `${item.product.name}-এর জন্য সর্বনিম্ন ${item.product.wholesaleMinQty} ${item.product.unit} অর্ডার করতে হবে`,
+            error: msg(req, 'orders.wholesaleMinQty', {
+              name: item.product.name,
+              min: item.product.wholesaleMinQty,
+              unit: item.product.unit,
+            }),
           })
         }
       }
@@ -138,16 +147,20 @@ router.post('/', async (req, res, next) => {
     for (const order of createdOrders) {
       await notifyUser(
         order.vendorId,
-        'নতুন অর্ডার এসেছে',
-        `আপনি একটি নতুন অর্ডার পেয়েছেন। মোট: ৳${order.totalAmount}`,
+        {
+          bn: { title: 'নতুন অর্ডার এসেছে', message: `আপনি একতি নতুন অর্ডার পেয়েছেন। মোট: ৳${order.totalAmount}` },
+          en: { title: 'New order received', message: `You have received a new order. Total: ₹${order.totalAmount}` },
+        },
         'order_placed',
         order.id,
         io,
       )
       await notifyUser(
         req.user!.id,
-        'অর্ডার সফল হয়েছে',
-        `আপনার অর্ডার সফলভাবে দেওয়া হয়েছে। মোট: ৳${order.totalAmount}`,
+        {
+          bn: { title: 'অর্ডার সফল হয়েছে', message: `আপনার অর্ডার সফলভাবে দেওয়া হয়েছে। মোট: ৳${order.totalAmount}` },
+          en: { title: 'Order placed successfully', message: `Your order has been placed successfully. Total: ₹${order.totalAmount}` },
+        },
         'order_placed',
         order.id,
         io,
@@ -193,9 +206,9 @@ router.get('/all', requireRole('admin'), async (_req, res) => {
 router.patch('/:id/status', requireRole('vendor', 'admin'), async (req, res) => {
   const { status } = req.body as { status: string }
   const order = await prisma.order.findUnique({ where: { id: req.params.id } })
-  if (!order) return res.status(404).json({ error: 'অর্ডার পাওয়া যায়নি' })
+  if (!order) return res.status(404).json({ error: msg(req, 'orders.notFound') })
   if (req.user!.role !== 'admin' && order.vendorId !== req.user!.id) {
-    return res.status(403).json({ error: 'এই অর্ডার পরিবর্তনের অনুমতি নেই' })
+    return res.status(403).json({ error: msg(req, 'orders.notAllowed') })
   }
 
   const updated = await prisma.order.update({
@@ -204,18 +217,20 @@ router.patch('/:id/status', requireRole('vendor', 'admin'), async (req, res) => 
     include: orderInclude,
   })
 
-  const statusLabels: Record<string, string> = {
-    confirmed: 'আপনার অর্ডার নিশ্চিত করা হয়েছে',
-    shipped: 'আপনার অর্ডার পাঠানো হয়েছে',
-    delivered: 'আপনার অর্ডার ডেলিভারি হয়েছে',
-    cancelled: 'আপনার অর্ডারটি বাতিল করা হয়েছে',
+  const statusContent: Record<string, { bn: string; en: string }> = {
+    confirmed: { bn: 'আপনার অর্ডার নিশ্চিত করা হয়েছে', en: 'Your order has been confirmed' },
+    shipped: { bn: 'আপনার অর্ডার পাঠানো হয়েছে', en: 'Your order has been shipped' },
+    delivered: { bn: 'আপনার অর্ডার ডেলিভারি হয়েছে', en: 'Your order has been delivered' },
+    cancelled: { bn: 'আপনার অর্ডারটি বাতিল করা হয়েছে', en: 'Your order has been cancelled' },
   }
-  if (statusLabels[status]) {
+  if (statusContent[status]) {
     const io = req.app.get('io')
     await notifyUser(
       order.buyerId,
-      statusLabels[status],
-      `অর্ডার #${order.id.slice(0, 8)} — বর্তমান অবস্থা আপডেট হয়েছে`,
+      {
+        bn: { title: statusContent[status].bn, message: `অর্ডার #${order.id.slice(0, 8)} — বর্তমান অবস্থা আপডেট হয়েছে` },
+        en: { title: statusContent[status].en, message: `Order #${order.id.slice(0, 8)} — status has been updated` },
+      },
       'order_status',
       order.id,
       io,
